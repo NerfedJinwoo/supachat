@@ -66,6 +66,8 @@ export default function AuthForm({
   const [suPassword, setSuPassword] = useState("");
   const [suConfirm, setSuConfirm] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [suUsername, setSuUsername] = useState("");
+  const [usernameStatus, setUsernameStatus] = useState<"idle" | "checking" | "available" | "taken" | "invalid">("idle");
 
   // Prefill email between tabs for UX continuity
   useEffect(() => {
@@ -117,6 +119,36 @@ export default function AuthForm({
     }
     return list;
   };
+
+  // Live username availability check (debounced)
+  useEffect(() => {
+    if (!supabase) return;
+    const raw = suUsername;
+    const cleaned = slugify(raw);
+    if (!raw) {
+      setUsernameStatus("idle");
+      return;
+    }
+    if (!cleaned || cleaned.length < 2) {
+      setUsernameStatus("invalid");
+      return;
+    }
+    setUsernameStatus("checking");
+    const t = setTimeout(async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("username", cleaned)
+        .limit(1);
+      if (error) {
+        // treat as idle to avoid blocking
+        setUsernameStatus("idle");
+        return;
+      }
+      setUsernameStatus(!data || data.length === 0 ? "available" : "taken");
+    }, 400);
+    return () => clearTimeout(t);
+  }, [suUsername, supabase]);
 
   const ensureUniqueUsername = useCallback(
     async (candidateBase: string): Promise<string> => {
@@ -245,9 +277,25 @@ export default function AuthForm({
       return;
     }
 
+    const cleanedUsername = slugify(suUsername);
+    if (!cleanedUsername || cleanedUsername.length < 2) {
+      setGlobalError("Please choose a valid username (letters/numbers/underscores).");
+      return;
+    }
+    // Final availability check just before submission
+    const { data: existing } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("username", cleanedUsername)
+      .limit(1);
+    if (existing && existing.length > 0) {
+      setGlobalError("Username is already taken. Please choose another.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const desiredUsername = await ensureUniqueUsername(name);
+      const desiredUsername = cleanedUsername;
       const { data, error } = await supabase.auth.signUp({
         email: suEmail.trim(),
         password: suPassword,
@@ -474,8 +522,35 @@ export default function AuthForm({
                   aria-invalid={!!globalError && displayName.trim().length < 2}
                 />
               </div>
+              <p className="text-xs text-muted-foreground">This is your display name shown to others.</p>
+            </div>
+
+            <div className="space-y-2">
+              <label
+                htmlFor="suUsername"
+                className="block text-sm font-medium text-foreground"
+              >
+                Username
+              </label>
+              <div className="relative">
+                <CircleUserRound
+                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <input
+                  id="suUsername"
+                  name="suUsername"
+                  type="text"
+                  required
+                  value={suUsername}
+                  onChange={(e) => setSuUsername(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-card px-10 py-2.5 text-sm outline-none ring-0 placeholder:text-muted-foreground/70 focus:border-input focus:ring-2 focus:ring-ring transition-shadow"
+                  placeholder="your_username"
+                  aria-invalid={usernameStatus === "taken" || usernameStatus === "invalid"}
+                />
+              </div>
               <p className="text-xs text-muted-foreground">
-                Your unique username will be generated from this.
+                Use 2-24 lowercase letters, numbers or underscores. {usernameStatus === "checking" ? "Checking..." : usernameStatus === "available" ? "Username is available" : usernameStatus === "taken" ? "Username is taken" : usernameStatus === "invalid" ? "Invalid username" : ""}
               </p>
             </div>
 
