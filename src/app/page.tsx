@@ -59,6 +59,85 @@ export default function Page() {
   const [activeCallId, setActiveCallId] = React.useState<string | null>(null);
   const callSignalChannelRef = React.useRef<any>(null);
 
+  // WebRTC refs
+  const localVideoRef = React.useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = React.useRef<HTMLVideoElement>(null);
+  const pcRef = React.useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = React.useRef<MediaStream | null>(null);
+  const remoteStreamRef = React.useRef<MediaStream | null>(null);
+  const pendingRemoteSDPRef = React.useRef<RTCSessionDescriptionInit | null>(null);
+  const isCallerRef = React.useRef<boolean>(false);
+
+  // WebRTC helpers
+  const rtcConfig = React.useRef<RTCConfiguration>({
+    iceServers: [
+      { urls: ["stun:stun.l.google.com:19302", "stun:global.stun.twilio.com:3478"] },
+    ],
+  });
+
+  const cleanupCall = React.useCallback(() => {
+    try { pcRef.current?.getSenders().forEach((s) => { try { s.track?.stop(); } catch {} }); } catch {}
+    try { pcRef.current?.getReceivers().forEach((r) => { try { r.track?.stop(); } catch {} }); } catch {}
+    try { pcRef.current?.close(); } catch {}
+    pcRef.current = null;
+    try { localStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+    try { remoteStreamRef.current?.getTracks().forEach((t) => t.stop()); } catch {}
+    localStreamRef.current = null;
+    remoteStreamRef.current = null;
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+  }, []);
+
+  const ensureLocalMedia = React.useCallback(async () => {
+    if (localStreamRef.current) return localStreamRef.current;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    localStreamRef.current = stream;
+    if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+    return stream;
+  }, []);
+
+  const setupPeerConnection = React.useCallback(() => {
+    if (pcRef.current) return pcRef.current;
+    const pc = new RTCPeerConnection(rtcConfig.current);
+    pc.onicecandidate = (e) => {
+      if (e.candidate && callPeerId && activeCallId && sessionUser) {
+        const channel = callSignalChannelRef.current;
+        if (channel) {
+          channel.send({
+            type: "broadcast",
+            event: "ice",
+            payload: {
+              callId: activeCallId,
+              from: sessionUser.id,
+              to: callPeerId,
+              candidate: e.candidate.toJSON(),
+              ts: Date.now(),
+            },
+          });
+        }
+      }
+    };
+    pc.ontrack = (e) => {
+      let remote = remoteStreamRef.current;
+      if (!remote) {
+        remote = new MediaStream();
+        remoteStreamRef.current = remote;
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remote;
+      }
+      e.streams[0]?.getTracks().forEach((t) => {
+        if (!remote!.getTracks().includes(t)) remote!.addTrack(t);
+      });
+    };
+    pc.onconnectionstatechange = () => {
+      const st = pc.connectionState;
+      if (st === "connected") setConnectionStatus("good");
+      else if (st === "connecting") setConnectionStatus("connecting");
+      else if (st === "disconnected" || st === "failed") setConnectionStatus("disconnected");
+    };
+    pcRef.current = pc;
+    return pc;
+  }, [activeCallId, callPeerId, sessionUser?.id]);
+
   // Setup Supabase Realtime call signaling
   React.useEffect(() => {
     if (!supabase || !sessionUser) return;
@@ -82,22 +161,37 @@ export default function Page() {
           setCallMuted(false);
           setCallSpeaker(false);
           setCallStartedAt(undefined);
+          // store remote SDP offer if provided
+          if (payload.sdp && payload.sdp.type === "offer") {
+            pendingRemoteSDPRef.current = payload.sdp as RTCSessionDescriptionInit;
+          }
           setCallOpen(true);
         } catch (_e) {}
       })
-      .on("broadcast", { event: "answer" }, ({ payload }) => {
+      .on("broadcast", { event: "answer" }, async ({ payload }) => {
         try {
           if (!payload || payload.to !== myId) return;
           // Peer answered our call
+          if (payload.sdp && payload.sdp.type === "answer" && pcRef.current) {
+            await pcRef.current.setRemoteDescription(payload.sdp as RTCSessionDescriptionInit);
+          }
           setCallState("active");
           setConnectionStatus("good");
           setCallStartedAt(Date.now());
+        } catch (_e) {}
+      })
+      .on("broadcast", { event: "ice" }, async ({ payload }) => {
+        try {
+          if (!payload || payload.to !== myId) return;
+          if (!pcRef.current || !payload.candidate) return;
+          await pcRef.current.addIceCandidate(payload.candidate);
         } catch (_e) {}
       })
       .on("broadcast", { event: "decline" }, ({ payload }) => {
         try {
           if (!payload || payload.to !== myId) return;
           // Peer declined
+          cleanupCall();
           setCallOpen(false);
           setCallStartedAt(undefined);
           setActiveCallId(null);
@@ -108,6 +202,7 @@ export default function Page() {
         try {
           if (!payload || payload.to !== myId) return;
           // Peer hung up
+          cleanupCall();
           setCallOpen(false);
           setCallStartedAt(undefined);
           setActiveCallId(null);
@@ -118,6 +213,7 @@ export default function Page() {
         try {
           if (!payload || payload.to !== myId) return;
           // Caller canceled before answer
+          cleanupCall();
           setCallOpen(false);
           setCallStartedAt(undefined);
           setActiveCallId(null);
@@ -137,7 +233,7 @@ export default function Page() {
   }, [supabase, sessionUser]);
 
   const sendCallEvent = React.useCallback(
-    async (event: "call" | "answer" | "decline" | "hangup" | "cancel", payload: Record<string, any>) => {
+    async (event: "call" | "answer" | "ice" | "decline" | "hangup" | "cancel", payload: Record<string, any>) => {
       const channel = callSignalChannelRef.current;
       if (!channel) return;
       await channel.send({ type: "broadcast", event, payload });
