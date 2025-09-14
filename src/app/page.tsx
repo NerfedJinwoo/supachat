@@ -55,6 +55,95 @@ export default function Page() {
   const [callSpeaker, setCallSpeaker] = React.useState(false);
   const [callStartedAt, setCallStartedAt] = React.useState<number | undefined>(undefined);
   const [connectionStatus, setConnectionStatus] = React.useState<"connecting" | "good" | "fair" | "poor" | "disconnected">("connecting");
+  const [callPeerId, setCallPeerId] = React.useState<string | null>(null);
+  const [activeCallId, setActiveCallId] = React.useState<string | null>(null);
+  const callSignalChannelRef = React.useRef<any>(null);
+
+  // Setup Supabase Realtime call signaling
+  React.useEffect(() => {
+    if (!supabase || !sessionUser) return;
+
+    // Create or reuse a global "calls" channel for lightweight broadcast signaling
+    const channel = supabase.channel("calls");
+    callSignalChannelRef.current = channel;
+
+    const myId = sessionUser.id;
+
+    channel
+      .on("broadcast", { event: "call" }, ({ payload }) => {
+        try {
+          if (!payload || payload.to !== myId) return;
+          // Incoming call request
+          setActiveCallId(payload.callId || null);
+          setCallPeerId(payload.from);
+          setCallContact({ name: payload.fromName, username: payload.fromUsername, avatarUrl: payload.fromAvatarUrl });
+          setCallState("incoming");
+          setConnectionStatus("connecting");
+          setCallMuted(false);
+          setCallSpeaker(false);
+          setCallStartedAt(undefined);
+          setCallOpen(true);
+        } catch (_e) {}
+      })
+      .on("broadcast", { event: "answer" }, ({ payload }) => {
+        try {
+          if (!payload || payload.to !== myId) return;
+          // Peer answered our call
+          setCallState("active");
+          setConnectionStatus("good");
+          setCallStartedAt(Date.now());
+        } catch (_e) {}
+      })
+      .on("broadcast", { event: "decline" }, ({ payload }) => {
+        try {
+          if (!payload || payload.to !== myId) return;
+          // Peer declined
+          setCallOpen(false);
+          setCallStartedAt(undefined);
+          setActiveCallId(null);
+          setCallPeerId(null);
+        } catch (_e) {}
+      })
+      .on("broadcast", { event: "hangup" }, ({ payload }) => {
+        try {
+          if (!payload || payload.to !== myId) return;
+          // Peer hung up
+          setCallOpen(false);
+          setCallStartedAt(undefined);
+          setActiveCallId(null);
+          setCallPeerId(null);
+        } catch (_e) {}
+      })
+      .on("broadcast", { event: "cancel" }, ({ payload }) => {
+        try {
+          if (!payload || payload.to !== myId) return;
+          // Caller canceled before answer
+          setCallOpen(false);
+          setCallStartedAt(undefined);
+          setActiveCallId(null);
+          setCallPeerId(null);
+        } catch (_e) {}
+      })
+      .subscribe((status: string) => {
+        // no-op; helpful for debugging: console.log("calls channel:", status)
+      });
+
+    return () => {
+      try {
+        channel.unsubscribe();
+      } catch {}
+      callSignalChannelRef.current = null;
+    };
+  }, [supabase, sessionUser]);
+
+  const sendCallEvent = React.useCallback(
+    async (event: "call" | "answer" | "decline" | "hangup" | "cancel", payload: Record<string, any>) => {
+      const channel = callSignalChannelRef.current;
+      if (!channel) return;
+      await channel.send({ type: "broadcast", event, payload });
+    },
+    []
+  );
 
   // Bootstrap auth
   React.useEffect(() => {
@@ -305,7 +394,10 @@ export default function Page() {
   );
 
   const handleStartCall = React.useCallback(() => {
-    if (!activeContact) return;
+    if (!activeContact || !currentUser) return;
+    const newCallId = `call_${Date.now()}`;
+    setActiveCallId(newCallId);
+    setCallPeerId(activeContact.id);
     setCallContact({ name: activeContact.name, username: activeContact.username, avatarUrl: activeContact.avatarUrl });
     setCallState("outgoing");
     setConnectionStatus("connecting");
@@ -313,13 +405,18 @@ export default function Page() {
     setCallSpeaker(false);
     setCallStartedAt(undefined);
     setCallOpen(true);
-    // simulate connect and active
-    window.setTimeout(() => {
-      setCallState("active");
-      setConnectionStatus("good");
-      setCallStartedAt(Date.now());
-    }, 1200);
-  }, [activeContact]);
+
+    // Signal the callee
+    sendCallEvent("call", {
+      callId: newCallId,
+      from: currentUser.id,
+      fromName: currentUser.displayName,
+      fromUsername: currentUser.username,
+      fromAvatarUrl: currentUser.avatarUrl ?? undefined,
+      to: activeContact.id,
+      ts: Date.now(),
+    });
+  }, [activeContact, currentUser, sendCallEvent]);
 
   const handleLogout = React.useCallback(async () => {
     if (!supabase) return;
@@ -414,18 +511,36 @@ export default function Page() {
           setCallState("active");
           setConnectionStatus("good");
           setCallStartedAt(Date.now());
+          if (callPeerId && activeCallId && currentUser) {
+            sendCallEvent("answer", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
+          }
         }}
         onDecline={() => {
           setCallOpen(false);
           setCallStartedAt(undefined);
+          if (callPeerId && activeCallId && currentUser) {
+            sendCallEvent("decline", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
+          }
+          setActiveCallId(null);
+          setCallPeerId(null);
         }}
         onHangup={() => {
           setCallOpen(false);
           setCallStartedAt(undefined);
+          if (callPeerId && activeCallId && currentUser) {
+            sendCallEvent("hangup", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
+          }
+          setActiveCallId(null);
+          setCallPeerId(null);
         }}
         onCancel={() => {
           setCallOpen(false);
           setCallStartedAt(undefined);
+          if (callPeerId && activeCallId && currentUser) {
+            sendCallEvent("cancel", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
+          }
+          setActiveCallId(null);
+          setCallPeerId(null);
         }}
         startedAt={callStartedAt}
         connectionStatus={connectionStatus}
