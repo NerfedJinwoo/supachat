@@ -23,6 +23,8 @@ import {
   SignalMedium,
   PhoneOff,
   CircleDot,
+  Video,
+  VideoOff,
 } from "lucide-react"
 
 type CallState = "incoming" | "outgoing" | "active"
@@ -42,6 +44,9 @@ export interface VoiceCallModalProps {
   speaker?: boolean
   onMuteToggle?: (muted: boolean) => void
   onSpeakerToggle?: (enabled: boolean) => void
+  // New: camera toggle
+  cameraOff?: boolean
+  onCameraToggle?: (off: boolean) => void
 
   // Actions
   onAnswer?: () => void
@@ -55,6 +60,11 @@ export interface VoiceCallModalProps {
 
   // A11y
   className?: string
+
+  // WebRTC
+  localVideoRef?: React.RefObject<HTMLVideoElement>
+  remoteVideoRef?: React.RefObject<HTMLVideoElement>
+  showVideo?: boolean
 }
 
 function formatDuration(ms: number) {
@@ -93,6 +103,9 @@ export default function VoiceCallModal({
   speaker = false,
   onMuteToggle,
   onSpeakerToggle,
+  // New camera props
+  cameraOff = false,
+  onCameraToggle,
   onAnswer,
   onDecline,
   onHangup,
@@ -100,6 +113,9 @@ export default function VoiceCallModal({
   startedAt,
   connectionStatus = "connecting",
   className,
+  localVideoRef,
+  remoteVideoRef,
+  showVideo,
 }: VoiceCallModalProps) {
   const [now, setNow] = React.useState<number>(() => Date.now())
 
@@ -224,6 +240,28 @@ export default function VoiceCallModal({
                     ) : null}
                   </div>
                 )}
+
+                {showVideo ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <div className="relative aspect-video overflow-hidden rounded-lg bg-black">
+                      <video
+                        ref={localVideoRef}
+                        muted
+                        playsInline
+                        autoPlay
+                        className="absolute inset-0 h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="relative aspect-video overflow-hidden rounded-lg bg-black">
+                      <video
+                        ref={remoteVideoRef}
+                        playsInline
+                        autoPlay
+                        className="absolute inset-0 h-full w-full object-cover"
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -262,6 +300,12 @@ export default function VoiceCallModal({
               </div>
             ) : (
               <div className="flex items-center justify-center gap-6">
+                <ToggleIconButton
+                  label={cameraOff ? "Turn camera on" : "Turn camera off"}
+                  active={cameraOff}
+                  onClick={() => onCameraToggle?.(!cameraOff)}
+                  icon={cameraOff ? <VideoOff className="h-5 w-5" aria-hidden="true" /> : <Video className="h-5 w-5" aria-hidden="true" />}
+                />
                 <ToggleIconButton
                   label={muted ? "Unmute" : "Mute"}
                   active={muted}

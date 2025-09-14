@@ -58,6 +58,7 @@ export default function Page() {
   const [callPeerId, setCallPeerId] = React.useState<string | null>(null);
   const [activeCallId, setActiveCallId] = React.useState<string | null>(null);
   const callSignalChannelRef = React.useRef<any>(null);
+  const [callCameraOff, setCallCameraOff] = React.useState(false);
 
   // WebRTC refs
   const localVideoRef = React.useRef<HTMLVideoElement>(null);
@@ -499,6 +500,7 @@ export default function Page() {
     setConnectionStatus("connecting");
     setCallMuted(false);
     setCallSpeaker(false);
+    setCallCameraOff(false);
     setCallStartedAt(undefined);
     setCallOpen(true);
     isCallerRef.current = true;
@@ -622,6 +624,14 @@ export default function Page() {
         avatarUrl={callContact?.avatarUrl}
         muted={callMuted}
         speaker={callSpeaker}
+        cameraOff={callCameraOff}
+        onCameraToggle={(off) => {
+          setCallCameraOff(off);
+          try {
+            const stream = localStreamRef.current;
+            stream?.getVideoTracks().forEach((t) => (t.enabled = !off));
+          } catch {}
+        }}
         onMuteToggle={(m) => {
           setCallMuted(m);
           try {
@@ -637,6 +647,7 @@ export default function Page() {
               isCallerRef.current = false;
               const pc = setupPeerConnection();
               const stream = await ensureLocalMedia();
+              setCallCameraOff(false);
               stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
               const remoteSDP = pendingRemoteSDPRef.current;
