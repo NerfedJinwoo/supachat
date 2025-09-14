@@ -8,7 +8,6 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogOverlay,
 } from "@/components/ui/dialog"
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
@@ -122,7 +121,6 @@ export default function VoiceCallModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogOverlay className="fixed inset-0 bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
       <DialogContent
         aria-label="Voice call dialog"
         className={cn(
