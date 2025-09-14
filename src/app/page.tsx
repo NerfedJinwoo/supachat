@@ -501,18 +501,39 @@ export default function Page() {
     setCallSpeaker(false);
     setCallStartedAt(undefined);
     setCallOpen(true);
+    isCallerRef.current = true;
 
-    // Signal the callee
-    sendCallEvent("call", {
-      callId: newCallId,
-      from: currentUser.id,
-      fromName: currentUser.displayName,
-      fromUsername: currentUser.username,
-      fromAvatarUrl: currentUser.avatarUrl ?? undefined,
-      to: activeContact.id,
-      ts: Date.now(),
-    });
-  }, [activeContact, currentUser, sendCallEvent]);
+    // Start WebRTC offer flow
+    (async () => {
+      try {
+        const stream = await ensureLocalMedia();
+        const pc = setupPeerConnection();
+        // Attach local tracks
+        stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+        // Create and send offer SDP
+        const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: true });
+        await pc.setLocalDescription(offer);
+
+        // Signal the callee with SDP
+        await sendCallEvent("call", {
+          callId: newCallId,
+          from: currentUser.id,
+          fromName: currentUser.displayName,
+          fromUsername: currentUser.username,
+          fromAvatarUrl: currentUser.avatarUrl ?? undefined,
+          to: activeContact.id,
+          sdp: offer,
+          ts: Date.now(),
+        });
+      } catch (_e) {
+        // Fallback cleanup on failure
+        cleanupCall();
+        setCallOpen(false);
+        setActiveCallId(null);
+        setCallPeerId(null);
+      }
+    })();
+  }, [activeContact, currentUser, ensureLocalMedia, setupPeerConnection, sendCallEvent, cleanupCall]);
 
   const handleLogout = React.useCallback(async () => {
     if (!supabase) return;
@@ -601,19 +622,44 @@ export default function Page() {
         avatarUrl={callContact?.avatarUrl}
         muted={callMuted}
         speaker={callSpeaker}
-        onMuteToggle={(m) => setCallMuted(m)}
+        onMuteToggle={(m) => {
+          setCallMuted(m);
+          try {
+            const stream = localStreamRef.current;
+            stream?.getAudioTracks().forEach((t) => (t.enabled = !m));
+          } catch {}
+        }}
         onSpeakerToggle={(s) => setCallSpeaker(s)}
         onAnswer={() => {
-          setCallState("active");
-          setConnectionStatus("good");
-          setCallStartedAt(Date.now());
-          if (callPeerId && activeCallId && currentUser) {
-            sendCallEvent("answer", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
-          }
+          // Accept incoming call: set remote offer, create and send answer
+          (async () => {
+            try {
+              isCallerRef.current = false;
+              const pc = setupPeerConnection();
+              const stream = await ensureLocalMedia();
+              stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+              const remoteSDP = pendingRemoteSDPRef.current;
+              if (remoteSDP && remoteSDP.type === "offer") {
+                await pc.setRemoteDescription(remoteSDP);
+              }
+              const answer = await pc.createAnswer();
+              await pc.setLocalDescription(answer);
+
+              setCallState("active");
+              setConnectionStatus("good");
+              setCallStartedAt(Date.now());
+
+              if (callPeerId && activeCallId && currentUser) {
+                await sendCallEvent("answer", { callId: activeCallId, from: currentUser.id, to: callPeerId, sdp: answer, ts: Date.now() });
+              }
+            } catch { /* noop */ }
+          })();
         }}
         onDecline={() => {
           setCallOpen(false);
           setCallStartedAt(undefined);
+          cleanupCall();
           if (callPeerId && activeCallId && currentUser) {
             sendCallEvent("decline", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
           }
@@ -623,6 +669,7 @@ export default function Page() {
         onHangup={() => {
           setCallOpen(false);
           setCallStartedAt(undefined);
+          cleanupCall();
           if (callPeerId && activeCallId && currentUser) {
             sendCallEvent("hangup", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
           }
@@ -632,6 +679,7 @@ export default function Page() {
         onCancel={() => {
           setCallOpen(false);
           setCallStartedAt(undefined);
+          cleanupCall();
           if (callPeerId && activeCallId && currentUser) {
             sendCallEvent("cancel", { callId: activeCallId, from: currentUser.id, to: callPeerId, ts: Date.now() });
           }
@@ -640,6 +688,9 @@ export default function Page() {
         }}
         startedAt={callStartedAt}
         connectionStatus={connectionStatus}
+        localVideoRef={localVideoRef}
+        remoteVideoRef={remoteVideoRef}
+        showVideo
       />
     </main>
   );
