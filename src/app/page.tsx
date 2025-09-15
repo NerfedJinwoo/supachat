@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import AuthForm from "@/components/AuthForm";
-import ChatSidebar from "@/components/ChatSidebar";
-import ChatInterface, { ChatMessage, Contact } from "@/components/ChatInterface";
-import VoiceCallModal from "@/components/VoiceCallModal";
+import AuthForm from "../components/AuthForm";
+import ChatSidebar from "../components/ChatSidebar";
+import ChatInterface, { ChatMessage, Contact } from "../components/ChatInterface";
+import VoiceCallModal from "../components/VoiceCallModal";
 import { createClient, Session, User as SupabaseUser } from "@supabase/supabase-js";
 
 type User = {
